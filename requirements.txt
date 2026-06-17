@@ -3,3 +3,4 @@ pyTelegramBotAPI
 yt-dlp
 urllib3
 flask
+flask_cors
