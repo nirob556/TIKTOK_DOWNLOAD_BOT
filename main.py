@@ -15,7 +15,6 @@ import shutil
 from datetime import datetime
 from urllib.parse import urlparse
 from flask import Flask, render_template, request, jsonify, send_file, send_from_directory
-from flask_cors import CORS
 from werkzeug.utils import secure_filename
 
 # --- Logging Configuration ---
@@ -32,8 +31,15 @@ TELEGRAM_UPLOAD_LIMIT_MB = 200
 
 # --- Flask App Setup ---
 app = Flask(__name__)
-CORS(app)
 app.secret_key = ''.join(random.choices(string.ascii_letters + string.digits, k=32))
+
+# --- CORS Middleware (Manual) ---
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    return response
 
 # --- Create directories ---
 DOWNLOAD_FOLDER = 'downloads'
@@ -199,8 +205,11 @@ def index():
     platforms = get_supported_platforms()
     return render_template_string(HTML_TEMPLATE, platforms=platforms, channel=CHANNEL_USERNAME)
 
-@app.route('/api/download', methods=['POST'])
+@app.route('/api/download', methods=['POST', 'OPTIONS'])
 def api_download():
+    if request.method == 'OPTIONS':
+        return '', 200
+    
     data = request.get_json()
     url = data.get('url', '').strip()
     format_type = data.get('format', 'video')
@@ -254,8 +263,11 @@ def download_file(download_id):
     
     return send_file(file_path, as_attachment=True, download_name=filename)
 
-@app.route('/api/check_url', methods=['POST'])
+@app.route('/api/check_url', methods=['POST', 'OPTIONS'])
 def check_url():
+    if request.method == 'OPTIONS':
+        return '', 200
+    
     data = request.get_json()
     url = data.get('url', '').strip()
     
