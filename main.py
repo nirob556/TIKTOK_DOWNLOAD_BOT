@@ -14,7 +14,7 @@ import uuid
 import shutil
 from datetime import datetime
 from urllib.parse import urlparse
-from flask import Flask, render_template, request, jsonify, send_file, send_from_directory
+from flask import Flask, render_template_string, request, jsonify, send_file
 from werkzeug.utils import secure_filename
 
 # --- Logging Configuration ---
@@ -1190,8 +1190,15 @@ HTML_TEMPLATE = """
 
 def run_bot():
     logger.info("🚀 Starting Telegram Bot...")
+    # Remove webhook to avoid conflicts
     try:
-        bot.polling(none_stop=True, interval=0)
+        bot.remove_webhook()
+        time.sleep(1)
+    except:
+        pass
+    # Start polling with skip_pending to ignore old updates
+    try:
+        bot.polling(none_stop=True, interval=0, timeout=20, long_polling_timeout=10, skip_pending=True)
     except Exception as e:
         logger.critical(f"Bot polling failed: {e}")
 
