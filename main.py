@@ -17,7 +17,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 # --- Settings ---
-BOT_TOKEN = "7510635174:AAGgtVg0KYyTfo0brf1YadFEVU3C8hmgt7g"
+BOT_TOKEN = "7510635174:AAE94bkop7G_RZAyf6kzoBADUNI_WKgrgMM"
 CHANNEL_USERNAME = "@SPEED_X_OFFICIAL1"
 OWNER_ID = 7224513731
 LOG_CHANNEL_ID = -1002780174909
