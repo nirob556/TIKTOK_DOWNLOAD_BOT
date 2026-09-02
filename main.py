@@ -33,7 +33,7 @@ app_config = {
     "popup_title": "🔥 SPEED_X VIP NOTICE 🔥",
     "popup_content": "Welcome to SPEED_X Ultimate Core System! Join our Telegram channels and enjoy VIP automated downloading & tools.",
     "popup_btn_text": "Join Telegram",
-    "popup_btn_url": "https://t.co",       # Custom button link
+    "popup_btn_url": "https://t.me/SPEED_X_OFFICIAL1",       # Custom button link
     "popup_show_button": True            # Show/Hide button on popup
 }
 
