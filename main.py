@@ -28,7 +28,7 @@ TEMP_FOLDER = 'temp'
 os.makedirs(TEMP_FOLDER, exist_ok=True)
 
 # --- Bot Configuration ---
-BOT_TOKEN = os.environ.get('BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
+BOT_TOKEN = os.environ.get('BOT_TOKEN', '7510635174:AAE94bkop7G_RZAyf6kzoBADUNI_WKgrgMM')
 try:
     bot = telebot.TeleBot(BOT_TOKEN, threaded=True, num_threads=4)
 except Exception:
@@ -48,8 +48,7 @@ app_config = {
     "popup_btn_url": "https://t.me/SPEED_X_OFFICIAL1",
     "popup_show_button": True,
     "auto_download": True,
-    "max_file_size": 500,  # MB
-    "allowed_platforms": ["tiktok", "facebook", "instagram", "youtube"]
+    "max_file_size": 500
 }
 
 ADMIN_CREDENTIALS = {
@@ -58,7 +57,7 @@ ADMIN_CREDENTIALS = {
 }
 
 # --- Helper Functions ---
-def get_random_string(length=9):
+def get_random_string(length=10):
     characters = string.ascii_letters + string.digits
     return ''.join(random.choices(characters, k=length))
 
@@ -72,18 +71,19 @@ def cleanup_file(file_path):
     return False
 
 def cleanup_old_files():
-    """Clean up files older than 1 hour"""
     try:
         current_time = time.time()
+        count = 0
         for filename in os.listdir(TEMP_FOLDER):
             file_path = os.path.join(TEMP_FOLDER, filename)
             if os.path.isfile(file_path):
                 file_age = current_time - os.path.getctime(file_path)
-                if file_age > 3600:  # 1 hour
+                if file_age > 3600:
                     os.remove(file_path)
-        return True
+                    count += 1
+        return count
     except:
-        return False
+        return 0
 
 def format_file_size(size_bytes):
     for unit in ['B', 'KB', 'MB', 'GB']:
@@ -94,14 +94,10 @@ def format_file_size(size_bytes):
 
 def detect_platform(url):
     url_lower = url.lower()
-    if 'tiktok.com' in url_lower or 'vm.tiktok' in url_lower:
+    if 'tiktok.com' in url_lower or 'vm.tiktok' in url_lower or 'vt.tiktok' in url_lower:
         return 'tiktok'
     if 'facebook.com' in url_lower or 'fb.watch' in url_lower or 'fb.com' in url_lower:
         return 'facebook'
-    if 'instagram.com' in url_lower:
-        return 'instagram'
-    if 'youtube.com' in url_lower or 'youtu.be' in url_lower:
-        return 'youtube'
     return 'unknown'
 
 def download_media(url, platform='tiktok', format_type='video'):
@@ -112,13 +108,12 @@ def download_media(url, platform='tiktok', format_type='video'):
 
     # Check if URL is valid
     try:
-        response = requests.head(url, timeout=5)
+        response = requests.head(url, timeout=5, allow_redirects=True)
         if response.status_code >= 400:
             return False, "Invalid URL or URL not accessible", None, None
     except:
         pass
 
-    # Updated yt-dlp options for better compatibility
     ydl_opts = {
         'quiet': True,
         'extract_flat': False,
@@ -164,7 +159,6 @@ def download_media(url, platform='tiktok', format_type='video'):
             
             # Try alternative filename if not found
             if not os.path.exists(filename):
-                # Check for any file with the base name
                 for f in os.listdir(temp_dir):
                     if f.startswith(filename_base):
                         filename = os.path.join(temp_dir, f)
@@ -172,12 +166,10 @@ def download_media(url, platform='tiktok', format_type='video'):
             
             if os.path.exists(filename):
                 file_size = os.path.getsize(filename)
-                # Check file size limit
                 if file_size > (app_config.get('max_file_size', 500) * 1024 * 1024):
                     os.remove(filename)
                     return False, f"File size exceeds limit ({app_config.get('max_file_size', 500)}MB)", None, None
                 
-                # Add to history
                 download_history.append({
                     'filename': os.path.basename(filename),
                     'platform': platform,
@@ -209,10 +201,9 @@ def download_media(url, platform='tiktok', format_type='video'):
 # --- Background cleanup thread ---
 def cleanup_thread():
     while True:
-        time.sleep(1800)  # Every 30 minutes
+        time.sleep(1800)
         cleanup_old_files()
 
-# Start cleanup thread
 cleanup_thread = threading.Thread(target=cleanup_thread, daemon=True)
 cleanup_thread.start()
 
@@ -372,7 +363,7 @@ INDEX_TEMPLATE = """
 
         .container { 
             width: 100%; 
-            max-width: 480px; 
+            max-width: 520px; 
             background: rgba(11, 15, 25, 0.85);
             border: 1px solid rgba(0, 255, 200, 0.12);
             border-radius: 28px; 
@@ -402,7 +393,7 @@ INDEX_TEMPLATE = """
         .main-title { text-align: center; margin-bottom: 28px; }
         .main-title .logo-icon { display: inline-block; font-size: 38px; color: #00ffc8; margin-bottom: 6px; text-shadow: 0 0 40px rgba(0,255,200,0.4), 0 0 80px rgba(0,255,200,0.1); animation: logoPulse 2.5s ease-in-out infinite; }
         @keyframes logoPulse { 0%, 100% { transform: scale(1) rotate(0deg); text-shadow: 0 0 40px rgba(0,255,200,0.4); } 50% { transform: scale(1.05) rotate(5deg); text-shadow: 0 0 60px rgba(0,255,200,0.7), 0 0 100px rgba(0,255,200,0.2); } }
-        .main-title h1 { font-size: 22px; font-weight: 800; letter-spacing: 1.5px; background: linear-gradient(135deg, #00ffc8, #00d4a8, #00b894); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .main-title h1 { font-size: 24px; font-weight: 800; letter-spacing: 1.5px; background: linear-gradient(135deg, #00ffc8, #00d4a8, #00b894); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
         .main-title .sub-title { font-size: 10px; color: #4a5568; text-transform: uppercase; letter-spacing: 4px; margin-top: 4px; font-weight: 600; }
         .main-title .sub-title i { color: #00ffc8; margin: 0 4px; }
 
@@ -539,58 +530,138 @@ INDEX_TEMPLATE = """
         .extract-btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none !important; }
         .extract-btn i { font-size: 16px; }
 
+        /* Loading Animation */
+        .loading-container {
+            margin-top: 16px;
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
+            padding: 20px;
+            background: rgba(7, 9, 19, 0.6);
+            border-radius: 16px;
+            border: 1px solid rgba(0,255,200,0.05);
+        }
+        .loading-container.active { display: flex; }
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid rgba(0,255,200,0.1);
+            border-top: 3px solid #00ffc8;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .loading-text {
+            font-size: 13px;
+            color: #9ca3af;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+        }
+        .loading-text span { color: #00ffc8; font-weight: 600; }
+        .loading-progress {
+            width: 100%;
+            height: 4px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+        .loading-progress-bar {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #00ffc8, #00b894);
+            border-radius: 2px;
+            animation: progressAnim 2s ease-in-out infinite;
+        }
+        @keyframes progressAnim {
+            0% { width: 0%; }
+            50% { width: 70%; }
+            100% { width: 100%; }
+        }
+
         .result-box { 
-            margin-top: 18px; 
+            margin-top: 16px; 
             background: rgba(7, 9, 19, 0.9); 
             border: 1px solid rgba(0,255,200,0.2); 
             border-radius: 18px; 
-            padding: 18px; 
+            padding: 20px; 
             display: none; 
             animation: successPop 0.7s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; 
             box-shadow: 0 0 40px rgba(0,255,200,0.05);
             position: relative;
             overflow: hidden;
         }
-        .result-box::before { content: ''; position: absolute; top: -100%; left: -100%; width: 300%; height: 300%; background: radial-gradient(circle at 30% 50%, rgba(0,255,200,0.03) 0%, transparent 50%); animation: resultGlow 8s linear infinite; pointer-events: none; }
+        .result-box::before {
+            content: '';
+            position: absolute;
+            top: -100%;
+            left: -100%;
+            width: 300%;
+            height: 300%;
+            background: radial-gradient(circle at 30% 50%, rgba(0,255,200,0.03) 0%, transparent 50%);
+            animation: resultGlow 8s linear infinite;
+            pointer-events: none;
+        }
         @keyframes resultGlow { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         
-        .result-box .result-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; position: relative; z-index: 1; }
-        .result-box .result-header h3 { font-size: 14px; color: #00ffc8; font-weight: 700; text-shadow: 0 0 20px rgba(0,255,200,0.2); }
-        .result-box .result-header .check-icon { display: inline-flex; width: 28px; height: 28px; background: rgba(0,255,200,0.1); border-radius: 50%; align-items: center; justify-content: center; color: #00ffc8; font-size: 14px; animation: bounceCheck 0.8s ease infinite alternate; border: 1px solid rgba(0,255,200,0.2); }
+        .result-box .result-header { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; position: relative; z-index: 1; }
+        .result-box .result-header h3 { font-size: 16px; color: #00ffc8; font-weight: 700; text-shadow: 0 0 20px rgba(0,255,200,0.2); }
+        .result-box .result-header .check-icon { 
+            display: inline-flex; 
+            width: 32px; 
+            height: 32px; 
+            background: rgba(0,255,200,0.1); 
+            border-radius: 50%; 
+            align-items: center; 
+            justify-content: center; 
+            color: #00ffc8; 
+            font-size: 16px; 
+            animation: bounceCheck 0.8s ease infinite alternate; 
+            border: 1px solid rgba(0,255,200,0.2); 
+        }
         @keyframes bounceCheck { from { transform: scale(1); } to { transform: scale(1.1); } }
         @keyframes successPop { 0% { opacity: 0; transform: scale(0.9) translateY(20px); } 100% { opacity: 1; transform: scale(1) translateY(0); } }
 
         .preview-container { 
             width: 100%; 
-            border-radius: 12px; 
+            border-radius: 14px; 
             overflow: hidden; 
             background: #000; 
-            margin-bottom: 12px; 
+            margin-bottom: 14px; 
             border: 1px solid rgba(0,255,200,0.08); 
             display: flex; 
             justify-content: center; 
             align-items: center;
             position: relative;
             z-index: 1;
-            min-height: 100px;
+            min-height: 120px;
+            max-height: 350px;
         }
-        .preview-container video, .preview-container audio { width: 100%; max-height: 220px; outline: none; display: block; }
+        .preview-container video, 
+        .preview-container audio { 
+            width: 100%; 
+            max-height: 320px; 
+            outline: none; 
+            display: block;
+            background: #000;
+        }
         
         .file-info { 
             font-size: 12px; 
-            color: #9ca3af; 
+            color: #d1d5db; 
             margin-bottom: 14px; 
             word-break: break-all; 
             line-height: 1.8; 
-            background: rgba(0,0,0,0.2); 
-            padding: 10px 14px; 
+            background: rgba(0,0,0,0.3); 
+            padding: 12px 16px; 
             border-radius: 10px;
             position: relative;
             z-index: 1;
-            border: 1px solid rgba(255,255,255,0.02);
+            border: 1px solid rgba(255,255,255,0.03);
         }
         .file-info .label { color: #6b7280; font-weight: 500; }
-        .file-info .value { color: #d1d5db; }
+        .file-info .value { color: #e5e7eb; font-weight: 400; }
+        .file-info .highlight { color: #00ffc8; font-weight: 600; }
         
         .download-action-btn { 
             width: 100%; 
@@ -601,7 +672,7 @@ INDEX_TEMPLATE = """
             text-align: center; 
             text-decoration: none; 
             font-weight: 600; 
-            font-size: 12px; 
+            font-size: 13px; 
             display: flex; 
             align-items: center; 
             justify-content: center; 
@@ -658,7 +729,6 @@ INDEX_TEMPLATE = """
         .footer i { color: #ff4444; margin: 0 4px; }
 
         .spinner { display: inline-block; width: 18px; height: 18px; border: 2px solid rgba(7, 9, 19, 0.2); border-top-color: #070913; border-radius: 50%; animation: spin 0.7s linear infinite; }
-        @keyframes spin { to { transform: rotate(360deg); } }
 
         .error-box {
             margin-top: 12px;
@@ -680,27 +750,34 @@ INDEX_TEMPLATE = """
             display: flex;
             gap: 12px;
             justify-content: center;
-            margin: 8px 0 4px;
+            margin: 8px 0 12px;
             flex-wrap: wrap;
         }
         .platform-badge {
-            font-size: 9px;
-            padding: 3px 10px;
+            font-size: 10px;
+            padding: 4px 14px;
             background: rgba(0,255,200,0.05);
             border: 1px solid rgba(0,255,200,0.08);
             border-radius: 20px;
             color: #6b7280;
             font-weight: 500;
             letter-spacing: 0.5px;
+            transition: all 0.3s ease;
         }
-        .platform-badge i { color: #00ffc8; margin-right: 4px; font-size: 8px; }
+        .platform-badge i { color: #00ffc8; margin-right: 4px; font-size: 9px; }
+        .platform-badge.active-badge { 
+            border-color: rgba(0,255,200,0.2); 
+            color: #d1d5db; 
+            background: rgba(0,255,200,0.05);
+        }
 
         @media (max-width: 480px) {
             .container { padding: 20px 16px; }
-            .main-title h1 { font-size: 18px; }
+            .main-title h1 { font-size: 20px; }
             .format-option { padding: 12px 8px; font-size: 10px; }
             .format-option i { font-size: 17px; }
             .extract-btn { font-size: 12px; padding: 14px; }
+            .preview-container { max-height: 250px; }
         }
     </style>
 </head>
@@ -744,16 +821,14 @@ INDEX_TEMPLATE = """
         </div>
 
         <div class="card-box">
-            <div class="card-label"><i class="fa-solid fa-link"></i> Enter Media Link (TikTok / Facebook / Instagram / YouTube)</div>
+            <div class="card-label"><i class="fa-solid fa-link"></i> Enter Media Link (TikTok / Facebook)</div>
             
             <div class="supported-platforms">
-                <span class="platform-badge"><i class="fa-solid fa-check"></i> TikTok</span>
-                <span class="platform-badge"><i class="fa-solid fa-check"></i> Facebook</span>
-                <span class="platform-badge"><i class="fa-solid fa-check"></i> Instagram</span>
-                <span class="platform-badge"><i class="fa-solid fa-check"></i> YouTube</span>
+                <span class="platform-badge active-badge"><i class="fa-solid fa-check-circle"></i> TikTok</span>
+                <span class="platform-badge active-badge"><i class="fa-solid fa-check-circle"></i> Facebook</span>
             </div>
             
-            <div class="input-row" style="margin-bottom: 10px; margin-top: 8px;">
+            <div class="input-row" style="margin-bottom: 10px; margin-top: 6px;">
                 <input type="text" id="mediaUrl" placeholder="Paste link here...">
             </div>
             <button type="button" class="paste-row-btn" id="pasteBtn"><i class="fa-solid fa-paste"></i> Paste Link from Clipboard</button>
@@ -774,6 +849,15 @@ INDEX_TEMPLATE = """
             <button type="button" class="extract-btn" id="submitBtn" onclick="processMedia()">
                 <i class="fa-solid fa-atom"></i> Initiate Extract System
             </button>
+
+            <!-- Loading Animation -->
+            <div class="loading-container" id="loadingContainer">
+                <div class="loading-spinner"></div>
+                <div class="loading-text"><span>⏳</span> Processing your request... Please wait</div>
+                <div class="loading-progress">
+                    <div class="loading-progress-bar"></div>
+                </div>
+            </div>
 
             <div class="error-box" id="errorBox">
                 <i class="fa-solid fa-circle-exclamation"></i>
@@ -844,6 +928,15 @@ INDEX_TEMPLATE = """
             }, 5000);
         }
 
+        function showLoading(show) {
+            const container = document.getElementById('loadingContainer');
+            if(show) {
+                container.classList.add('active');
+            } else {
+                container.classList.remove('active');
+            }
+        }
+
         document.getElementById('pasteBtn').addEventListener('click', async () => {
             try {
                 const text = await navigator.clipboard.readText();
@@ -867,7 +960,6 @@ INDEX_TEMPLATE = """
             const previewContainer = document.getElementById('previewContainer');
             const fileInfo = document.getElementById('fileInfo');
             const downloadLink = document.getElementById('downloadLink');
-            const errorBox = document.getElementById('errorBox');
 
             if(!url) {
                 showError('⚠️ Please enter or paste a valid link first.');
@@ -875,9 +967,10 @@ INDEX_TEMPLATE = """
             }
 
             submitBtn.disabled = true;
-            submitBtn.innerHTML = '<span class="spinner"></span> Extracting & Processing...';
+            submitBtn.innerHTML = '<span class="spinner"></span> Processing...';
             resultBox.style.display = 'none';
-            errorBox.style.display = 'none';
+            document.getElementById('errorBox').style.display = 'none';
+            showLoading(true);
 
             try {
                 const res = await fetch('/api/process', {
@@ -887,19 +980,19 @@ INDEX_TEMPLATE = """
                 });
                 const data = await res.json();
 
+                showLoading(false);
+
                 if(data.success) {
                     const platformEmojis = {
                         'tiktok': '📱',
                         'facebook': '📘',
-                        'instagram': '📸',
-                        'youtube': '▶️',
                         'unknown': '🔗'
                     };
                     const platformDisplay = data.platform.toUpperCase();
                     const emoji = platformEmojis[data.platform] || '🔗';
                     
                     fileInfo.innerHTML = `
-                        <span class="label">${emoji} Platform:</span> <span class="value">${platformDisplay}</span> &nbsp;|&nbsp; 
+                        <span class="label">${emoji} Platform:</span> <span class="value highlight">${platformDisplay}</span> &nbsp;|&nbsp; 
                         <span class="label">📦 Size:</span> <span class="value">${data.filesize}</span> &nbsp;|&nbsp; 
                         <span class="label">📄 File:</span> <span class="value">${data.filename}</span>
                     `;
@@ -911,6 +1004,7 @@ INDEX_TEMPLATE = """
                         audio.controls = true;
                         audio.src = data.stream_url;
                         audio.style.width = '100%';
+                        audio.style.maxHeight = '80px';
                         previewContainer.appendChild(audio);
                     } else {
                         const video = document.createElement('video');
@@ -919,6 +1013,7 @@ INDEX_TEMPLATE = """
                         video.muted = true;
                         video.src = data.stream_url;
                         video.style.width = '100%';
+                        video.style.maxHeight = '320px';
                         previewContainer.appendChild(video);
                     }
 
@@ -928,6 +1023,7 @@ INDEX_TEMPLATE = """
                     showError('❌ ' + data.message);
                 }
             } catch(e) {
+                showLoading(false);
                 showError('⚠️ Network connection error. Please try again.');
                 console.error(e);
             } finally {
@@ -1283,14 +1379,13 @@ def api_process():
     if not url:
         return jsonify({'success': False, 'message': 'Please provide a valid URL.'})
 
-    # Clean up old files before processing
     cleanup_old_files()
 
     platform = detect_platform(url)
     
-    # Check if platform is allowed
-    if platform not in app_config.get('allowed_platforms', ['tiktok', 'facebook', 'instagram', 'youtube']):
-        return jsonify({'success': False, 'message': f'Platform "{platform}" is not supported or disabled.'})
+    # Only TikTok and Facebook are supported
+    if platform not in ['tiktok', 'facebook']:
+        return jsonify({'success': False, 'message': 'Only TikTok and Facebook links are supported!'})
     
     success, file_path, unique_id, filesize = download_media(url, platform, format_type)
     
@@ -1322,17 +1417,6 @@ def download_file_route(file_id):
     if path and os.path.exists(path):
         return send_file(path, as_attachment=True)
     return "File expired or not found!", 404
-
-@app.route('/api/history')
-def get_history():
-    return jsonify({'history': download_history})
-
-@app.route('/api/cleanup')
-def cleanup_route():
-    if not session.get('admin_logged'):
-        return jsonify({'success': False, 'message': 'Unauthorized'})
-    count = cleanup_old_files()
-    return jsonify({'success': True, 'message': f'Cleaned up {count} old files.'})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
