@@ -5,10 +5,12 @@ import time
 import string
 import random
 import threading
+import subprocess
 from datetime import datetime
-from flask import Flask, render_template_string, request, redirect, url_for, session, jsonify, send_file
+from flask import Flask, render_template_string, request, redirect, url_for, session, jsonify, send_file, send_from_directory
 import telebot
 import yt_dlp
+import requests
 
 app = Flask(__name__)
 app.secret_key = 'speed_x_super_secret_key_nirob_bbz'
@@ -33,6 +35,7 @@ except Exception:
     bot = None
 
 download_files = {}
+download_history = []
 
 # --- Global Control & App Settings (Managed via /admin) ---
 app_config = {
@@ -43,7 +46,10 @@ app_config = {
     "popup_content": "Welcome to SPEED_X Ultimate Core System! Join our Telegram channels and enjoy VIP automated downloading & tools.",
     "popup_btn_text": "Join Telegram",
     "popup_btn_url": "https://t.me/SPEED_X_OFFICIAL1",
-    "popup_show_button": True
+    "popup_show_button": True,
+    "auto_download": True,
+    "max_file_size": 500,  # MB
+    "allowed_platforms": ["tiktok", "facebook", "instagram", "youtube"]
 }
 
 ADMIN_CREDENTIALS = {
@@ -58,35 +64,79 @@ def get_random_string(length=9):
 
 def cleanup_file(file_path):
     if file_path and os.path.exists(file_path):
-        try: os.remove(file_path)
-        except: pass
+        try: 
+            os.remove(file_path)
+            return True
+        except: 
+            return False
+    return False
+
+def cleanup_old_files():
+    """Clean up files older than 1 hour"""
+    try:
+        current_time = time.time()
+        for filename in os.listdir(TEMP_FOLDER):
+            file_path = os.path.join(TEMP_FOLDER, filename)
+            if os.path.isfile(file_path):
+                file_age = current_time - os.path.getctime(file_path)
+                if file_age > 3600:  # 1 hour
+                    os.remove(file_path)
+        return True
+    except:
+        return False
 
 def format_file_size(size_bytes):
     for unit in ['B', 'KB', 'MB', 'GB']:
-        if size_bytes < 1024.0: return f"{size_bytes:.1f} {unit}"
+        if size_bytes < 1024.0:
+            return f"{size_bytes:.1f} {unit}"
         size_bytes /= 1024.0
     return f"{size_bytes:.1f} GB"
 
 def detect_platform(url):
     url_lower = url.lower()
-    if 'tiktok.com' in url_lower or 'vm.tiktok' in url_lower: return 'tiktok'
-    if 'facebook.com' in url_lower or 'fb.watch' in url_lower or 'fb.com' in url_lower: return 'facebook'
-    if 'instagram.com' in url_lower: return 'instagram'
+    if 'tiktok.com' in url_lower or 'vm.tiktok' in url_lower:
+        return 'tiktok'
+    if 'facebook.com' in url_lower or 'fb.watch' in url_lower or 'fb.com' in url_lower:
+        return 'facebook'
+    if 'instagram.com' in url_lower:
+        return 'instagram'
+    if 'youtube.com' in url_lower or 'youtu.be' in url_lower:
+        return 'youtube'
     return 'unknown'
 
 def download_media(url, platform='tiktok', format_type='video'):
-    unique_id = get_random_string(8)
+    unique_id = get_random_string(10)
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     filename_base = f"{platform}_{format_type}_{timestamp}_{unique_id}"
     temp_dir = TEMP_FOLDER
 
+    # Check if URL is valid
+    try:
+        response = requests.head(url, timeout=5)
+        if response.status_code >= 400:
+            return False, "Invalid URL or URL not accessible", None, None
+    except:
+        pass
+
+    # Updated yt-dlp options for better compatibility
     ydl_opts = {
         'quiet': True,
         'extract_flat': False,
         'no_warnings': True,
         'outtmpl': os.path.join(temp_dir, f'{filename_base}.%(ext)s'),
-        'socket_timeout': 15,
-        'retries': 2
+        'socket_timeout': 30,
+        'retries': 5,
+        'fragment_retries': 5,
+        'skip_download': False,
+        'ignoreerrors': True,
+        'no_check_certificate': True,
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-us,en;q=0.5',
+            'Sec-Fetch-Mode': 'navigate',
+        }
     }
 
     if format_type == 'audio':
@@ -95,28 +145,76 @@ def download_media(url, platform='tiktok', format_type='video'):
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
-                'preferredquality': '192',
+                'preferredquality': '320',
             }],
         })
     else:
         ydl_opts.update({
-            'format': 'best[ext=mp4]/best/bestvideo+bestaudio',
+            'format': 'best[ext=mp4]/best/bestvideo+bestaudio/best',
+            'merge_output_format': 'mp4',
         })
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             filename = ydl.prepare_filename(info)
+            
             if format_type == 'audio':
                 filename = os.path.splitext(filename)[0] + '.mp3'
             
+            # Try alternative filename if not found
+            if not os.path.exists(filename):
+                # Check for any file with the base name
+                for f in os.listdir(temp_dir):
+                    if f.startswith(filename_base):
+                        filename = os.path.join(temp_dir, f)
+                        break
+            
             if os.path.exists(filename):
                 file_size = os.path.getsize(filename)
+                # Check file size limit
+                if file_size > (app_config.get('max_file_size', 500) * 1024 * 1024):
+                    os.remove(filename)
+                    return False, f"File size exceeds limit ({app_config.get('max_file_size', 500)}MB)", None, None
+                
+                # Add to history
+                download_history.append({
+                    'filename': os.path.basename(filename),
+                    'platform': platform,
+                    'format': format_type,
+                    'size': format_file_size(file_size),
+                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                })
+                if len(download_history) > 50:
+                    download_history.pop(0)
+                
                 return True, filename, unique_id, format_file_size(file_size)
+            else:
+                return False, "File not found after download", None, None
+                
+    except yt_dlp.utils.DownloadError as e:
+        error_msg = str(e)
+        if "Unsupported URL" in error_msg:
+            return False, "Unsupported URL format. Please check the link.", None, None
+        elif "Private video" in error_msg:
+            return False, "This video is private or restricted.", None, None
+        elif "Copyright" in error_msg:
+            return False, "This content is copyright protected.", None, None
+        else:
+            return False, f"Download failed: {error_msg[:100]}", None, None
     except Exception as e:
         print(f"Download Error: {e}")
-    
-    return False, str(e) if 'e' in locals() else "Download failed", None, None
+        return False, f"Error: {str(e)[:100]}", None, None
+
+# --- Background cleanup thread ---
+def cleanup_thread():
+    while True:
+        time.sleep(1800)  # Every 30 minutes
+        cleanup_old_files()
+
+# Start cleanup thread
+cleanup_thread = threading.Thread(target=cleanup_thread, daemon=True)
+cleanup_thread.start()
 
 # --- Middleware for Maintenance Mode ---
 @app.before_request
@@ -185,12 +283,7 @@ MAINTENANCE_TEMPLATE = """
             background-size: 300% 300%;
             animation: borderGlow 4s ease-in-out infinite;
         }
-        .mt-icon {
-            font-size: 60px;
-            margin-bottom: 20px;
-            display: block;
-            animation: pulseGlow 2s ease-in-out infinite;
-        }
+        .mt-icon { font-size: 60px; margin-bottom: 20px; display: block; animation: pulseGlow 2s ease-in-out infinite; }
         h1 { 
             font-size: 28px; 
             font-weight: 800; 
@@ -200,52 +293,16 @@ MAINTENANCE_TEMPLATE = """
             margin-bottom: 12px;
             letter-spacing: 1px;
         }
-        p { 
-            color: #9ca3af; 
-            line-height: 1.8; 
-            font-size: 14px;
-            -webkit-text-fill-color: #9ca3af;
-        }
-        .mt-status {
-            margin-top: 25px;
-            padding-top: 20px;
-            border-top: 1px solid rgba(255,255,255,0.05);
-        }
-        .mt-status span {
-            display: inline-block;
-            width: 8px;
-            height: 8px;
-            background: #ff4444;
-            border-radius: 50%;
-            margin-right: 10px;
-            animation: blinkRed 1.2s ease-in-out infinite;
-        }
-        .credit { 
-            margin-top: 25px; 
-            font-size: 11px; 
-            color: #4a5568; 
-            text-transform: uppercase; 
-            letter-spacing: 3px; 
-            font-weight: 600;
-        }
+        p { color: #9ca3af; line-height: 1.8; font-size: 14px; -webkit-text-fill-color: #9ca3af; }
+        .mt-status { margin-top: 25px; padding-top: 20px; border-top: 1px solid rgba(255,255,255,0.05); }
+        .mt-status span { display: inline-block; width: 8px; height: 8px; background: #ff4444; border-radius: 50%; margin-right: 10px; animation: blinkRed 1.2s ease-in-out infinite; }
+        .credit { margin-top: 25px; font-size: 11px; color: #4a5568; text-transform: uppercase; letter-spacing: 3px; font-weight: 600; }
         .credit strong { color: #00ffc8; -webkit-text-fill-color: #00ffc8; }
         
-        @keyframes floatIn {
-            from { opacity: 0; transform: translateY(40px) scale(0.95); }
-            to { opacity: 1; transform: translateY(0) scale(1); }
-        }
-        @keyframes borderGlow {
-            0%, 100% { background-position: 0% 50%; }
-            50% { background-position: 100% 50%; }
-        }
-        @keyframes pulseGlow {
-            0%, 100% { transform: scale(1); opacity: 1; }
-            50% { transform: scale(1.08); opacity: 0.8; }
-        }
-        @keyframes blinkRed {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.2; }
-        }
+        @keyframes floatIn { from { opacity: 0; transform: translateY(40px) scale(0.95); } to { opacity: 1; transform: translateY(0) scale(1); } }
+        @keyframes borderGlow { 0%, 100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+        @keyframes pulseGlow { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.08); opacity: 0.8; } }
+        @keyframes blinkRed { 0%, 100% { opacity: 1; } 50% { opacity: 0.2; } }
     </style>
 </head>
 <body>
@@ -254,9 +311,7 @@ MAINTENANCE_TEMPLATE = """
             <span class="mt-icon">🔧</span>
             <h1>SYSTEM OFFLINE</h1>
             <p>{{ msg }}</p>
-            <div class="mt-status">
-                <span></span> Maintenance Mode Active
-            </div>
+            <div class="mt-status"><span></span> Maintenance Mode Active</div>
             <div class="credit">VIP Software Engineered by <strong>NIROB BBZ</strong> © 2026</div>
         </div>
     </div>
@@ -290,7 +345,6 @@ INDEX_TEMPLATE = """
                 radial-gradient(ellipse at 80% 50%, rgba(0, 255, 200, 0.03) 0%, transparent 50%);
         }
         
-        /* Animated Background Particles */
         .bg-particles {
             position: fixed;
             top: 0;
@@ -318,7 +372,7 @@ INDEX_TEMPLATE = """
 
         .container { 
             width: 100%; 
-            max-width: 460px; 
+            max-width: 480px; 
             background: rgba(11, 15, 25, 0.85);
             border: 1px solid rgba(0, 255, 200, 0.12);
             border-radius: 28px; 
@@ -342,50 +396,16 @@ INDEX_TEMPLATE = """
             background-size: 400% 400%;
             animation: borderRotate 6s linear infinite;
         }
-        @keyframes borderRotate {
-            0% { background-position: 0% 50%; }
-            50% { background-position: 100% 50%; }
-            100% { background-position: 0% 50%; }
-        }
-        @keyframes containerFloat {
-            0%, 100% { transform: translateY(0); }
-            50% { transform: translateY(-5px); }
-        }
+        @keyframes borderRotate { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
+        @keyframes containerFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
 
-        /* Header */
         .main-title { text-align: center; margin-bottom: 28px; }
-        .main-title .logo-icon {
-            display: inline-block;
-            font-size: 38px;
-            color: #00ffc8;
-            margin-bottom: 6px;
-            text-shadow: 0 0 40px rgba(0,255,200,0.4), 0 0 80px rgba(0,255,200,0.1);
-            animation: logoPulse 2.5s ease-in-out infinite;
-        }
-        @keyframes logoPulse {
-            0%, 100% { transform: scale(1) rotate(0deg); text-shadow: 0 0 40px rgba(0,255,200,0.4); }
-            50% { transform: scale(1.05) rotate(5deg); text-shadow: 0 0 60px rgba(0,255,200,0.7), 0 0 100px rgba(0,255,200,0.2); }
-        }
-        .main-title h1 { 
-            font-size: 22px; 
-            font-weight: 800; 
-            letter-spacing: 1.5px;
-            background: linear-gradient(135deg, #00ffc8, #00d4a8, #00b894);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            text-shadow: none;
-        }
-        .main-title .sub-title {
-            font-size: 10px;
-            color: #4a5568;
-            text-transform: uppercase;
-            letter-spacing: 4px;
-            margin-top: 4px;
-            font-weight: 600;
-        }
+        .main-title .logo-icon { display: inline-block; font-size: 38px; color: #00ffc8; margin-bottom: 6px; text-shadow: 0 0 40px rgba(0,255,200,0.4), 0 0 80px rgba(0,255,200,0.1); animation: logoPulse 2.5s ease-in-out infinite; }
+        @keyframes logoPulse { 0%, 100% { transform: scale(1) rotate(0deg); text-shadow: 0 0 40px rgba(0,255,200,0.4); } 50% { transform: scale(1.05) rotate(5deg); text-shadow: 0 0 60px rgba(0,255,200,0.7), 0 0 100px rgba(0,255,200,0.2); } }
+        .main-title h1 { font-size: 22px; font-weight: 800; letter-spacing: 1.5px; background: linear-gradient(135deg, #00ffc8, #00d4a8, #00b894); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .main-title .sub-title { font-size: 10px; color: #4a5568; text-transform: uppercase; letter-spacing: 4px; margin-top: 4px; font-weight: 600; }
         .main-title .sub-title i { color: #00ffc8; margin: 0 4px; }
 
-        /* Card */
         .card-box { 
             background: rgba(17, 24, 39, 0.6); 
             border: 1px solid rgba(0, 255, 200, 0.06); 
@@ -394,11 +414,7 @@ INDEX_TEMPLATE = """
             margin-bottom: 16px; 
             transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
         }
-        .card-box:hover { 
-            border-color: rgba(0,255,200,0.15); 
-            box-shadow: 0 0 30px rgba(0,255,200,0.02);
-            transform: translateY(-2px);
-        }
+        .card-box:hover { border-color: rgba(0,255,200,0.15); box-shadow: 0 0 30px rgba(0,255,200,0.02); transform: translateY(-2px); }
         
         .card-label { 
             font-size: 10px; 
@@ -426,10 +442,7 @@ INDEX_TEMPLATE = """
             transition: all 0.3s ease;
             font-family: 'Poppins', sans-serif;
         }
-        input[type="text"]:focus { 
-            border-color: #00ffc8; 
-            box-shadow: 0 0 20px rgba(0,255,200,0.08);
-        }
+        input[type="text"]:focus { border-color: #00ffc8; box-shadow: 0 0 20px rgba(0,255,200,0.08); }
         input[type="text"]::placeholder { color: #4a5568; }
         
         .action-btn { 
@@ -447,10 +460,7 @@ INDEX_TEMPLATE = """
             box-shadow: 0 4px 15px rgba(0,255,200,0.15);
             letter-spacing: 0.5px;
         }
-        .action-btn:hover { 
-            transform: scale(1.03); 
-            box-shadow: 0 6px 25px rgba(0,255,200,0.25);
-        }
+        .action-btn:hover { transform: scale(1.03); box-shadow: 0 6px 25px rgba(0,255,200,0.25); }
 
         .paste-row-btn { 
             background: rgba(31, 41, 55, 0.6); 
@@ -470,16 +480,9 @@ INDEX_TEMPLATE = """
             font-weight: 500;
             letter-spacing: 0.3px;
         }
-        .paste-row-btn:hover { 
-            background: rgba(31, 41, 55, 0.9); 
-            color: #fff; 
-            border-color: rgba(0,255,200,0.3);
-            box-shadow: 0 0 25px rgba(0,255,200,0.05);
-            transform: translateY(-1px);
-        }
+        .paste-row-btn:hover { background: rgba(31, 41, 55, 0.9); color: #fff; border-color: rgba(0,255,200,0.3); box-shadow: 0 0 25px rgba(0,255,200,0.05); transform: translateY(-1px); }
         .paste-row-btn i { color: #00ffc8; }
 
-        /* Format Grid */
         .format-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
         .format-option { 
             background: rgba(7, 9, 19, 0.8); 
@@ -500,43 +503,14 @@ INDEX_TEMPLATE = """
             overflow: hidden;
         }
         .format-option i { font-size: 20px; color: #4a5568; transition: all 0.3s ease; }
-        .format-option .badge {
-            font-size: 8px;
-            background: rgba(0,255,200,0.1);
-            padding: 2px 8px;
-            border-radius: 20px;
-            color: #00ffc8;
-            margin-top: 2px;
-            opacity: 0;
-            transition: all 0.3s ease;
-        }
+        .format-option .badge { font-size: 8px; background: rgba(0,255,200,0.1); padding: 2px 8px; border-radius: 20px; color: #00ffc8; margin-top: 2px; opacity: 0; transition: all 0.3s ease; }
         .format-option.active .badge { opacity: 1; }
-        .format-option::after {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: linear-gradient(135deg, rgba(0,255,200,0.05), transparent);
-            opacity: 0;
-            transition: all 0.4s ease;
-        }
+        .format-option::after { content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: linear-gradient(135deg, rgba(0,255,200,0.05), transparent); opacity: 0; transition: all 0.4s ease; }
         .format-option:hover::after { opacity: 1; }
-        .format-option:hover { 
-            border-color: rgba(0,255,200,0.2); 
-            transform: translateY(-2px);
-        }
-        .format-option.active { 
-            border-color: #00ffc8; 
-            background: rgba(0,255,200,0.06); 
-            color: #fff; 
-            box-shadow: 0 0 25px rgba(0,255,200,0.06), inset 0 0 25px rgba(0,255,200,0.02);
-            transform: translateY(-2px);
-        }
+        .format-option:hover { border-color: rgba(0,255,200,0.2); transform: translateY(-2px); }
+        .format-option.active { border-color: #00ffc8; background: rgba(0,255,200,0.06); color: #fff; box-shadow: 0 0 25px rgba(0,255,200,0.06), inset 0 0 25px rgba(0,255,200,0.02); transform: translateY(-2px); }
         .format-option.active i { color: #00ffc8; }
 
-        /* Extract Button */
         .extract-btn { 
             width: 100%; 
             padding: 16px; 
@@ -558,31 +532,13 @@ INDEX_TEMPLATE = """
             position: relative;
             overflow: hidden;
         }
-        .extract-btn::before {
-            content: '';
-            position: absolute;
-            top: -50%;
-            left: -50%;
-            width: 200%;
-            height: 200%;
-            background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 60%);
-            opacity: 0;
-            transition: all 0.5s ease;
-        }
+        .extract-btn::before { content: ''; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%; background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 60%); opacity: 0; transition: all 0.5s ease; }
         .extract-btn:hover::before { opacity: 1; }
-        .extract-btn:hover { 
-            transform: translateY(-3px) scale(1.01); 
-            box-shadow: 0 10px 40px rgba(0,255,200,0.35);
-        }
+        .extract-btn:hover { transform: translateY(-3px) scale(1.01); box-shadow: 0 10px 40px rgba(0,255,200,0.35); }
         .extract-btn:active { transform: scale(0.98); }
-        .extract-btn:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-            transform: none !important;
-        }
+        .extract-btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none !important; }
         .extract-btn i { font-size: 16px; }
 
-        /* Result Box */
         .result-box { 
             margin-top: 18px; 
             background: rgba(7, 9, 19, 0.9); 
@@ -595,57 +551,14 @@ INDEX_TEMPLATE = """
             position: relative;
             overflow: hidden;
         }
-        .result-box::before {
-            content: '';
-            position: absolute;
-            top: -100%;
-            left: -100%;
-            width: 300%;
-            height: 300%;
-            background: radial-gradient(circle at 30% 50%, rgba(0,255,200,0.03) 0%, transparent 50%);
-            animation: resultGlow 8s linear infinite;
-            pointer-events: none;
-        }
-        @keyframes resultGlow {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
+        .result-box::before { content: ''; position: absolute; top: -100%; left: -100%; width: 300%; height: 300%; background: radial-gradient(circle at 30% 50%, rgba(0,255,200,0.03) 0%, transparent 50%); animation: resultGlow 8s linear infinite; pointer-events: none; }
+        @keyframes resultGlow { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         
-        .result-box .result-header {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-bottom: 12px;
-            position: relative;
-            z-index: 1;
-        }
-        .result-box .result-header h3 { 
-            font-size: 14px; 
-            color: #00ffc8; 
-            font-weight: 700; 
-            text-shadow: 0 0 20px rgba(0,255,200,0.2);
-        }
-        .result-box .result-header .check-icon {
-            display: inline-flex;
-            width: 28px;
-            height: 28px;
-            background: rgba(0,255,200,0.1);
-            border-radius: 50%;
-            align-items: center;
-            justify-content: center;
-            color: #00ffc8;
-            font-size: 14px;
-            animation: bounceCheck 0.8s ease infinite alternate;
-            border: 1px solid rgba(0,255,200,0.2);
-        }
-        @keyframes bounceCheck {
-            from { transform: scale(1); }
-            to { transform: scale(1.1); }
-        }
-        @keyframes successPop {
-            0% { opacity: 0; transform: scale(0.9) translateY(20px); }
-            100% { opacity: 1; transform: scale(1) translateY(0); }
-        }
+        .result-box .result-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; position: relative; z-index: 1; }
+        .result-box .result-header h3 { font-size: 14px; color: #00ffc8; font-weight: 700; text-shadow: 0 0 20px rgba(0,255,200,0.2); }
+        .result-box .result-header .check-icon { display: inline-flex; width: 28px; height: 28px; background: rgba(0,255,200,0.1); border-radius: 50%; align-items: center; justify-content: center; color: #00ffc8; font-size: 14px; animation: bounceCheck 0.8s ease infinite alternate; border: 1px solid rgba(0,255,200,0.2); }
+        @keyframes bounceCheck { from { transform: scale(1); } to { transform: scale(1.1); } }
+        @keyframes successPop { 0% { opacity: 0; transform: scale(0.9) translateY(20px); } 100% { opacity: 1; transform: scale(1) translateY(0); } }
 
         .preview-container { 
             width: 100%; 
@@ -661,13 +574,7 @@ INDEX_TEMPLATE = """
             z-index: 1;
             min-height: 100px;
         }
-        .preview-container video, 
-        .preview-container audio { 
-            width: 100%; 
-            max-height: 220px; 
-            outline: none; 
-            display: block;
-        }
+        .preview-container video, .preview-container audio { width: 100%; max-height: 220px; outline: none; display: block; }
         
         .file-info { 
             font-size: 12px; 
@@ -706,13 +613,8 @@ INDEX_TEMPLATE = """
             position: relative;
             z-index: 1;
         }
-        .download-action-btn:hover { 
-            transform: translateY(-2px) scale(1.01); 
-            box-shadow: 0 8px 30px rgba(37,99,235,0.4);
-            background: linear-gradient(135deg, #1d4ed8, #1e40af);
-        }
+        .download-action-btn:hover { transform: translateY(-2px) scale(1.01); box-shadow: 0 8px 30px rgba(37,99,235,0.4); background: linear-gradient(135deg, #1d4ed8, #1e40af); }
 
-        /* Popup Styles */
         .modal-overlay { 
             position: fixed; 
             top: 0; 
@@ -728,10 +630,7 @@ INDEX_TEMPLATE = """
             padding: 20px; 
             animation: overlayFade 0.3s ease forwards;
         }
-        @keyframes overlayFade {
-            from { opacity: 0; }
-            to { opacity: 1; }
-        }
+        @keyframes overlayFade { from { opacity: 0; } to { opacity: 1; } }
         .modal-card { 
             background: rgba(11, 15, 25, 0.95); 
             border: 1px solid rgba(0,255,200,0.2); 
@@ -744,114 +643,58 @@ INDEX_TEMPLATE = """
             position: relative; 
             animation: scaleUp 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
         }
-        @keyframes scaleUp {
-            from { transform: scale(0.85) translateY(20px); opacity: 0; }
-            to { transform: scale(1) translateY(0); opacity: 1; }
-        }
-        .modal-icon { 
-            width: 60px; 
-            height: 60px; 
-            background: rgba(0,255,200,0.08); 
-            border-radius: 50%; 
-            display: flex; 
-            align-items: center; 
-            justify-content: center; 
-            margin: 0 auto 16px; 
-            color: #00ffc8; 
-            font-size: 26px; 
-            border: 1px solid rgba(0,255,200,0.15);
-            animation: modalIconPulse 2s ease-in-out infinite;
-        }
-        @keyframes modalIconPulse {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.05); box-shadow: 0 0 30px rgba(0,255,200,0.1); }
-        }
-        .modal-card h2 { 
-            font-size: 19px; 
-            color: #fff; 
-            margin-bottom: 8px; 
-            font-weight: 700;
-            letter-spacing: 0.5px;
-        }
-        .modal-card p { 
-            color: #9ca3af; 
-            font-size: 13px; 
-            line-height: 1.7; 
-            margin-bottom: 20px; 
-        }
-        .modal-btn { 
-            display: block; 
-            width: 100%; 
-            padding: 14px; 
-            background: linear-gradient(135deg, #00ffc8, #00b894); 
-            color: #070913; 
-            font-weight: 700; 
-            border-radius: 12px; 
-            text-decoration: none; 
-            font-size: 13px; 
-            box-shadow: 0 4px 20px rgba(0,255,200,0.2); 
-            transition: all 0.3s ease;
-            letter-spacing: 0.5px;
-        }
-        .modal-btn:hover { 
-            transform: translateY(-2px); 
-            box-shadow: 0 8px 30px rgba(0,255,200,0.35);
-        }
-        .modal-close { 
-            position: absolute; 
-            top: 14px; 
-            right: 18px; 
-            background: none; 
-            border: none; 
-            color: #6b7280; 
-            font-size: 22px; 
-            cursor: pointer; 
-            transition: all 0.3s ease;
-            width: 32px;
-            height: 32px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 50%;
-        }
-        .modal-close:hover { 
-            color: #fff; 
-            background: rgba(255,255,255,0.05);
-            transform: rotate(90deg);
-        }
+        @keyframes scaleUp { from { transform: scale(0.85) translateY(20px); opacity: 0; } to { transform: scale(1) translateY(0); opacity: 1; } }
+        .modal-icon { width: 60px; height: 60px; background: rgba(0,255,200,0.08); border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px; color: #00ffc8; font-size: 26px; border: 1px solid rgba(0,255,200,0.15); animation: modalIconPulse 2s ease-in-out infinite; }
+        @keyframes modalIconPulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); box-shadow: 0 0 30px rgba(0,255,200,0.1); } }
+        .modal-card h2 { font-size: 19px; color: #fff; margin-bottom: 8px; font-weight: 700; letter-spacing: 0.5px; }
+        .modal-card p { color: #9ca3af; font-size: 13px; line-height: 1.7; margin-bottom: 20px; }
+        .modal-btn { display: block; width: 100%; padding: 14px; background: linear-gradient(135deg, #00ffc8, #00b894); color: #070913; font-weight: 700; border-radius: 12px; text-decoration: none; font-size: 13px; box-shadow: 0 4px 20px rgba(0,255,200,0.2); transition: all 0.3s ease; letter-spacing: 0.5px; }
+        .modal-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(0,255,200,0.35); }
+        .modal-close { position: absolute; top: 14px; right: 18px; background: none; border: none; color: #6b7280; font-size: 22px; cursor: pointer; transition: all 0.3s ease; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 50%; }
+        .modal-close:hover { color: #fff; background: rgba(255,255,255,0.05); transform: rotate(90deg); }
 
-        .footer { 
-            margin-top: 22px; 
-            text-align: center; 
-            font-size: 10px; 
-            color: #374151; 
-            letter-spacing: 1.5px; 
-            text-transform: uppercase;
-            font-weight: 600;
-        }
-        .footer span { 
-            color: #00ffc8; 
-            font-weight: 700; 
-            -webkit-text-fill-color: #00ffc8;
-            text-shadow: 0 0 20px rgba(0,255,200,0.1);
-        }
+        .footer { margin-top: 22px; text-align: center; font-size: 10px; color: #374151; letter-spacing: 1.5px; text-transform: uppercase; font-weight: 600; }
+        .footer span { color: #00ffc8; font-weight: 700; -webkit-text-fill-color: #00ffc8; text-shadow: 0 0 20px rgba(0,255,200,0.1); }
         .footer i { color: #ff4444; margin: 0 4px; }
 
-        /* Loading Spinner */
-        .spinner {
-            display: inline-block;
-            width: 18px;
-            height: 18px;
-            border: 2px solid rgba(7, 9, 19, 0.2);
-            border-top-color: #070913;
-            border-radius: 50%;
-            animation: spin 0.7s linear infinite;
-        }
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
+        .spinner { display: inline-block; width: 18px; height: 18px; border: 2px solid rgba(7, 9, 19, 0.2); border-top-color: #070913; border-radius: 50%; animation: spin 0.7s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
 
-        /* Responsive */
+        .error-box {
+            margin-top: 12px;
+            padding: 12px 16px;
+            background: rgba(255, 0, 0, 0.08);
+            border: 1px solid rgba(255, 0, 0, 0.2);
+            border-radius: 12px;
+            color: #ff6b6b;
+            font-size: 13px;
+            display: none;
+            align-items: center;
+            gap: 10px;
+            animation: shake 0.5s ease;
+        }
+        @keyframes shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
+        .error-box i { font-size: 16px; }
+
+        .supported-platforms {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+            margin: 8px 0 4px;
+            flex-wrap: wrap;
+        }
+        .platform-badge {
+            font-size: 9px;
+            padding: 3px 10px;
+            background: rgba(0,255,200,0.05);
+            border: 1px solid rgba(0,255,200,0.08);
+            border-radius: 20px;
+            color: #6b7280;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+        }
+        .platform-badge i { color: #00ffc8; margin-right: 4px; font-size: 8px; }
+
         @media (max-width: 480px) {
             .container { padding: 20px 16px; }
             .main-title h1 { font-size: 18px; }
@@ -863,10 +706,8 @@ INDEX_TEMPLATE = """
 </head>
 <body>
 
-    <!-- Background Particles -->
     <div class="bg-particles" id="particles"></div>
 
-    <!-- Popup Modal -->
     {% if config.popup_active %}
     <div class="modal-overlay" id="popupModal">
         <div class="modal-card">
@@ -881,13 +722,9 @@ INDEX_TEMPLATE = """
     </div>
     <script>
         window.addEventListener('DOMContentLoaded', () => {
-            setTimeout(() => { 
-                document.getElementById('popupModal').style.display = 'flex'; 
-            }, 500);
+            setTimeout(() => { document.getElementById('popupModal').style.display = 'flex'; }, 500);
         });
-        function closePopup() { 
-            document.getElementById('popupModal').style.display = 'none'; 
-        }
+        function closePopup() { document.getElementById('popupModal').style.display = 'none'; }
     </script>
     {% endif %}
 
@@ -898,7 +735,6 @@ INDEX_TEMPLATE = """
             <div class="sub-title"><i class="fa-regular fa-circle"></i> ULTIMATE CORE SYSTEM <i class="fa-regular fa-circle"></i></div>
         </div>
 
-        <!-- Telegram Signature ID Box -->
         <div class="card-box">
             <div class="card-label"><i class="fa-solid fa-fingerprint"></i> Telegram User Account Signature ID</div>
             <div class="input-row">
@@ -907,21 +743,26 @@ INDEX_TEMPLATE = """
             </div>
         </div>
 
-        <!-- Network Link Resource Box -->
         <div class="card-box">
-            <div class="card-label"><i class="fa-solid fa-link"></i> Enter Media Link (TikTok / Facebook / Instagram)</div>
+            <div class="card-label"><i class="fa-solid fa-link"></i> Enter Media Link (TikTok / Facebook / Instagram / YouTube)</div>
             
-            <div class="input-row" style="margin-bottom: 10px;">
+            <div class="supported-platforms">
+                <span class="platform-badge"><i class="fa-solid fa-check"></i> TikTok</span>
+                <span class="platform-badge"><i class="fa-solid fa-check"></i> Facebook</span>
+                <span class="platform-badge"><i class="fa-solid fa-check"></i> Instagram</span>
+                <span class="platform-badge"><i class="fa-solid fa-check"></i> YouTube</span>
+            </div>
+            
+            <div class="input-row" style="margin-bottom: 10px; margin-top: 8px;">
                 <input type="text" id="mediaUrl" placeholder="Paste link here...">
             </div>
             <button type="button" class="paste-row-btn" id="pasteBtn"><i class="fa-solid fa-paste"></i> Paste Link from Clipboard</button>
 
-            <!-- Format Selector -->
             <div class="format-grid">
                 <div class="format-option active" id="optVideo" onclick="setFormat('video')">
                     <i class="fa-solid fa-video"></i>
                     MP4 Video
-                    <span class="badge">HD</span>
+                    <span class="badge">HD Quality</span>
                 </div>
                 <div class="format-option" id="optAudio" onclick="setFormat('audio')">
                     <i class="fa-solid fa-music"></i>
@@ -934,7 +775,11 @@ INDEX_TEMPLATE = """
                 <i class="fa-solid fa-atom"></i> Initiate Extract System
             </button>
 
-            <!-- Success Box with Live Preview & Neon Animation -->
+            <div class="error-box" id="errorBox">
+                <i class="fa-solid fa-circle-exclamation"></i>
+                <span id="errorMessage">Error loading content. Please try again.</span>
+            </div>
+
             <div class="result-box" id="resultBox">
                 <div class="result-header">
                     <span class="check-icon"><i class="fa-solid fa-check"></i></span>
@@ -950,7 +795,6 @@ INDEX_TEMPLATE = """
     </div>
 
     <script>
-        // Generate Background Particles
         (function() {
             const container = document.getElementById('particles');
             for(let i = 0; i < 35; i++) {
@@ -990,11 +834,20 @@ INDEX_TEMPLATE = """
             }
         }
 
+        function showError(message) {
+            const errorBox = document.getElementById('errorBox');
+            const errorMessage = document.getElementById('errorMessage');
+            errorMessage.textContent = message;
+            errorBox.style.display = 'flex';
+            setTimeout(() => {
+                errorBox.style.display = 'none';
+            }, 5000);
+        }
+
         document.getElementById('pasteBtn').addEventListener('click', async () => {
             try {
                 const text = await navigator.clipboard.readText();
                 document.getElementById('mediaUrl').value = text;
-                // Visual feedback
                 const btn = document.getElementById('pasteBtn');
                 btn.innerHTML = '<i class="fa-solid fa-check"></i> Pasted!';
                 btn.style.borderColor = '#00ffc8';
@@ -1003,7 +856,7 @@ INDEX_TEMPLATE = """
                     btn.style.borderColor = '#1f2937';
                 }, 1500);
             } catch (err) {
-                alert('⚠️ Clipboard access denied. Please paste manually.');
+                showError('⚠️ Clipboard access denied. Please paste manually.');
             }
         });
 
@@ -1014,15 +867,17 @@ INDEX_TEMPLATE = """
             const previewContainer = document.getElementById('previewContainer');
             const fileInfo = document.getElementById('fileInfo');
             const downloadLink = document.getElementById('downloadLink');
+            const errorBox = document.getElementById('errorBox');
 
             if(!url) {
-                alert('⚠️ Please enter or paste a valid link first.');
+                showError('⚠️ Please enter or paste a valid link first.');
                 return;
             }
 
             submitBtn.disabled = true;
             submitBtn.innerHTML = '<span class="spinner"></span> Extracting & Processing...';
             resultBox.style.display = 'none';
+            errorBox.style.display = 'none';
 
             try {
                 const res = await fetch('/api/process', {
@@ -1037,6 +892,7 @@ INDEX_TEMPLATE = """
                         'tiktok': '📱',
                         'facebook': '📘',
                         'instagram': '📸',
+                        'youtube': '▶️',
                         'unknown': '🔗'
                     };
                     const platformDisplay = data.platform.toUpperCase();
@@ -1049,7 +905,6 @@ INDEX_TEMPLATE = """
                     `;
                     downloadLink.href = data.download_url;
                     
-                    // Render Proper Preview
                     previewContainer.innerHTML = '';
                     if(data.format === 'audio') {
                         const audio = document.createElement('audio');
@@ -1068,20 +923,19 @@ INDEX_TEMPLATE = """
                     }
 
                     resultBox.style.display = 'block';
-                    // Scroll to result
                     resultBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
                 } else {
-                    alert('❌ Error: ' + data.message);
+                    showError('❌ ' + data.message);
                 }
             } catch(e) {
-                alert('⚠️ Network connection error. Please try again.');
+                showError('⚠️ Network connection error. Please try again.');
+                console.error(e);
             } finally {
                 submitBtn.disabled = false;
                 submitBtn.innerHTML = '<i class="fa-solid fa-atom"></i> Initiate Extract System';
             }
         }
 
-        // Enter key support
         document.getElementById('mediaUrl').addEventListener('keypress', function(e) {
             if(e.key === 'Enter') {
                 e.preventDefault();
@@ -1104,147 +958,24 @@ ADMIN_LOGIN_TEMPLATE = """
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { 
-            background: #070913; 
-            color: #fff; 
-            font-family: 'Poppins', sans-serif; 
-            display: flex; 
-            justify-content: center; 
-            align-items: center; 
-            height: 100vh; 
-            margin: 0;
-            background-image: radial-gradient(ellipse at center, #0a0f1a 0%, #070913 100%);
-        }
-        .login-wrapper {
-            width: 100%;
-            max-width: 400px;
-            padding: 20px;
-        }
-        .login-card { 
-            background: rgba(11, 15, 25, 0.9); 
-            border: 1px solid rgba(0,255,200,0.12); 
-            padding: 40px 35px; 
-            border-radius: 24px; 
-            box-shadow: 0 25px 60px rgba(0,0,0,0.5), 0 0 40px rgba(0,255,200,0.02);
-            backdrop-filter: blur(20px);
-            position: relative;
-            overflow: hidden;
-        }
-        .login-card::before {
-            content: '';
-            position: absolute;
-            top: -50%;
-            left: -50%;
-            width: 200%;
-            height: 200%;
-            background: radial-gradient(circle at 30% 40%, rgba(0,255,200,0.03) 0%, transparent 50%);
-            animation: rotateBg 20s linear infinite;
-            pointer-events: none;
-        }
-        @keyframes rotateBg {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        .login-logo {
-            text-align: center;
-            margin-bottom: 25px;
-            position: relative;
-            z-index: 1;
-        }
-        .login-logo i {
-            font-size: 40px;
-            color: #00ffc8;
-            text-shadow: 0 0 40px rgba(0,255,200,0.3);
-        }
-        .login-logo h2 { 
-            color: #fff; 
-            font-size: 20px; 
-            font-weight: 700;
-            margin-top: 6px;
-        }
-        .login-logo span {
-            color: #6b7280;
-            font-size: 11px;
-            text-transform: uppercase;
-            letter-spacing: 2px;
-        }
-        .input-group { 
-            margin-bottom: 16px; 
-            position: relative;
-            z-index: 1;
-        }
-        label { 
-            display: block; 
-            font-size: 11px; 
-            color: #9ca3af; 
-            margin-bottom: 5px; 
-            font-weight: 500;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        input { 
-            width: 100%; 
-            padding: 12px 16px; 
-            background: rgba(7, 9, 19, 0.8); 
-            border: 1px solid #1f2937; 
-            border-radius: 12px; 
-            color: #fff; 
-            outline: none; 
-            font-size: 13px; 
-            font-family: 'Poppins', sans-serif;
-            transition: all 0.3s ease;
-        }
-        input:focus { 
-            border-color: #00ffc8; 
-            box-shadow: 0 0 20px rgba(0,255,200,0.05);
-        }
-        .btn { 
-            width: 100%; 
-            padding: 13px; 
-            background: linear-gradient(135deg, #00ffc8, #00b894); 
-            color: #070913; 
-            border: none; 
-            border-radius: 12px; 
-            font-weight: 700; 
-            font-size: 13px; 
-            cursor: pointer; 
-            margin-top: 6px; 
-            text-transform: uppercase;
-            letter-spacing: 0.8px;
-            transition: all 0.3s ease;
-            box-shadow: 0 4px 20px rgba(0,255,200,0.15);
-            position: relative;
-            z-index: 1;
-        }
-        .btn:hover { 
-            transform: translateY(-2px); 
-            box-shadow: 0 8px 30px rgba(0,255,200,0.25);
-        }
-        .error { 
-            color: #ff6b6b; 
-            font-size: 12px; 
-            text-align: center; 
-            margin-bottom: 14px; 
-            background: rgba(255,0,0,0.05);
-            padding: 10px;
-            border-radius: 10px;
-            border: 1px solid rgba(255,0,0,0.1);
-            position: relative;
-            z-index: 1;
-        }
-        .back-link { 
-            display: block; 
-            text-align: center; 
-            margin-top: 16px; 
-            color: #6b7280; 
-            text-decoration: none; 
-            font-size: 12px; 
-            transition: all 0.3s ease;
-            position: relative;
-            z-index: 1;
-        }
+        body { background: #070913; color: #fff; font-family: 'Poppins', sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background-image: radial-gradient(ellipse at center, #0a0f1a 0%, #070913 100%); }
+        .login-wrapper { width: 100%; max-width: 400px; padding: 20px; }
+        .login-card { background: rgba(11, 15, 25, 0.9); border: 1px solid rgba(0,255,200,0.12); padding: 40px 35px; border-radius: 24px; box-shadow: 0 25px 60px rgba(0,0,0,0.5), 0 0 40px rgba(0,255,200,0.02); backdrop-filter: blur(20px); position: relative; overflow: hidden; }
+        .login-card::before { content: ''; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%; background: radial-gradient(circle at 30% 40%, rgba(0,255,200,0.03) 0%, transparent 50%); animation: rotateBg 20s linear infinite; pointer-events: none; }
+        @keyframes rotateBg { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .login-logo { text-align: center; margin-bottom: 25px; position: relative; z-index: 1; }
+        .login-logo i { font-size: 40px; color: #00ffc8; text-shadow: 0 0 40px rgba(0,255,200,0.3); }
+        .login-logo h2 { color: #fff; font-size: 20px; font-weight: 700; margin-top: 6px; }
+        .login-logo span { color: #6b7280; font-size: 11px; text-transform: uppercase; letter-spacing: 2px; }
+        .input-group { margin-bottom: 16px; position: relative; z-index: 1; }
+        label { display: block; font-size: 11px; color: #9ca3af; margin-bottom: 5px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }
+        input { width: 100%; padding: 12px 16px; background: rgba(7, 9, 19, 0.8); border: 1px solid #1f2937; border-radius: 12px; color: #fff; outline: none; font-size: 13px; font-family: 'Poppins', sans-serif; transition: all 0.3s ease; }
+        input:focus { border-color: #00ffc8; box-shadow: 0 0 20px rgba(0,255,200,0.05); }
+        .btn { width: 100%; padding: 13px; background: linear-gradient(135deg, #00ffc8, #00b894); color: #070913; border: none; border-radius: 12px; font-weight: 700; font-size: 13px; cursor: pointer; margin-top: 6px; text-transform: uppercase; letter-spacing: 0.8px; transition: all 0.3s ease; box-shadow: 0 4px 20px rgba(0,255,200,0.15); position: relative; z-index: 1; }
+        .btn:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(0,255,200,0.25); }
+        .error { color: #ff6b6b; font-size: 12px; text-align: center; margin-bottom: 14px; background: rgba(255,0,0,0.05); padding: 10px; border-radius: 10px; border: 1px solid rgba(255,0,0,0.1); position: relative; z-index: 1; }
+        .back-link { display: block; text-align: center; margin-top: 16px; color: #6b7280; text-decoration: none; font-size: 12px; transition: all 0.3s ease; position: relative; z-index: 1; }
         .back-link:hover { color: #00ffc8; }
-        .back-link i { margin-right: 6px; }
     </style>
 </head>
 <body>
@@ -1287,265 +1018,59 @@ ADMIN_DASHBOARD_TEMPLATE = """
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { 
-            background: #070913; 
-            color: #fff; 
-            font-family: 'Poppins', sans-serif; 
-            display: flex; 
-            min-height: 100vh; 
-        }
-        .sidebar { 
-            width: 240px; 
-            background: rgba(11, 15, 25, 0.95); 
-            border-right: 1px solid #1f2937; 
-            padding: 28px 18px; 
-            display: flex; 
-            flex-direction: column; 
-            justify-content: space-between;
-            position: sticky;
-            top: 0;
-            height: 100vh;
-        }
-        .sidebar-brand h2 { 
-            color: #00ffc8; 
-            font-size: 17px; 
-            font-weight: 800; 
-            letter-spacing: 0.5px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
+        body { background: #070913; color: #fff; font-family: 'Poppins', sans-serif; display: flex; min-height: 100vh; }
+        .sidebar { width: 240px; background: rgba(11, 15, 25, 0.95); border-right: 1px solid #1f2937; padding: 28px 18px; display: flex; flex-direction: column; justify-content: space-between; position: sticky; top: 0; height: 100vh; }
+        .sidebar-brand h2 { color: #00ffc8; font-size: 17px; font-weight: 800; letter-spacing: 0.5px; display: flex; align-items: center; gap: 10px; }
         .sidebar-brand h2 i { font-size: 20px; }
-        .sidebar-brand span {
-            font-size: 9px;
-            color: #4a5568;
-            text-transform: uppercase;
-            letter-spacing: 2px;
-            margin-top: 2px;
-            display: block;
-        }
+        .sidebar-brand span { font-size: 9px; color: #4a5568; text-transform: uppercase; letter-spacing: 2px; margin-top: 2px; display: block; }
         .sidebar-nav { margin-top: 30px; }
-        .sidebar-nav a { 
-            display: flex; 
-            align-items: center; 
-            gap: 12px; 
-            color: #9ca3af; 
-            text-decoration: none; 
-            padding: 10px 14px; 
-            border-radius: 10px; 
-            margin-bottom: 4px; 
-            transition: all 0.3s ease; 
-            font-size: 13px; 
-            font-weight: 500;
-        }
-        .sidebar-nav a:hover, 
-        .sidebar-nav a.active { 
-            background: rgba(0,255,200,0.06); 
-            color: #00ffc8; 
-            border-left: 2px solid #00ffc8;
-        }
+        .sidebar-nav a { display: flex; align-items: center; gap: 12px; color: #9ca3af; text-decoration: none; padding: 10px 14px; border-radius: 10px; margin-bottom: 4px; transition: all 0.3s ease; font-size: 13px; font-weight: 500; }
+        .sidebar-nav a:hover, .sidebar-nav a.active { background: rgba(0,255,200,0.06); color: #00ffc8; border-left: 2px solid #00ffc8; }
         .sidebar-nav a i { width: 20px; text-align: center; }
-        .sidebar-footer { 
-            border-top: 1px solid #1f2937; 
-            padding-top: 16px; 
-        }
-        .sidebar-footer a {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            color: #ef4444;
-            text-decoration: none;
-            padding: 10px 14px;
-            border-radius: 10px;
-            font-size: 13px;
-            font-weight: 500;
-            transition: all 0.3s ease;
-        }
+        .sidebar-footer { border-top: 1px solid #1f2937; padding-top: 16px; }
+        .sidebar-footer a { display: flex; align-items: center; gap: 12px; color: #ef4444; text-decoration: none; padding: 10px 14px; border-radius: 10px; font-size: 13px; font-weight: 500; transition: all 0.3s ease; }
         .sidebar-footer a:hover { background: rgba(239,68,68,0.05); }
         
-        .main-content { 
-            flex: 1; 
-            padding: 35px 40px; 
-            overflow-y: auto; 
-            max-width: 1000px;
-            margin: 0 auto;
-        }
-        .header { 
-            display: flex; 
-            justify-content: space-between; 
-            align-items: center; 
-            margin-bottom: 30px; 
-            border-bottom: 1px solid #1f2937; 
-            padding-bottom: 18px; 
-        }
-        .header h1 { 
-            font-size: 22px; 
-            font-weight: 700; 
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
+        .main-content { flex: 1; padding: 35px 40px; overflow-y: auto; max-width: 1000px; margin: 0 auto; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; border-bottom: 1px solid #1f2937; padding-bottom: 18px; }
+        .header h1 { font-size: 22px; font-weight: 700; display: flex; align-items: center; gap: 12px; }
         .header h1 i { color: #00ffc8; }
-        .header .user-info { 
-            color: #6b7280; 
-            font-size: 12px; 
-            background: rgba(255,255,255,0.03);
-            padding: 8px 16px;
-            border-radius: 20px;
-            border: 1px solid #1f2937;
-        }
+        .header .user-info { color: #6b7280; font-size: 12px; background: rgba(255,255,255,0.03); padding: 8px 16px; border-radius: 20px; border: 1px solid #1f2937; }
         .header .user-info strong { color: #d1d5db; }
         
-        .card { 
-            background: rgba(11, 15, 25, 0.8); 
-            border: 1px solid #1f2937; 
-            border-radius: 18px; 
-            padding: 26px 28px; 
-            margin-bottom: 22px; 
-            box-shadow: 0 8px 25px rgba(0,0,0,0.2);
-            transition: all 0.3s ease;
-        }
+        .card { background: rgba(11, 15, 25, 0.8); border: 1px solid #1f2937; border-radius: 18px; padding: 26px 28px; margin-bottom: 22px; box-shadow: 0 8px 25px rgba(0,0,0,0.2); transition: all 0.3s ease; }
         .card:hover { border-color: rgba(0,255,200,0.08); }
-        .card h3 { 
-            font-size: 15px; 
-            color: #00ffc8; 
-            margin-bottom: 18px; 
-            display: flex; 
-            align-items: center; 
-            gap: 10px; 
-            font-weight: 600;
-        }
+        .card h3 { font-size: 15px; color: #00ffc8; margin-bottom: 18px; display: flex; align-items: center; gap: 10px; font-weight: 600; }
         .card h3 i { font-size: 16px; }
         
         .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
         .form-group { margin-bottom: 12px; }
         .form-group.full { grid-column: span 2; }
-        label { 
-            display: block; 
-            font-size: 11px; 
-            color: #9ca3af; 
-            margin-bottom: 5px; 
-            font-weight: 500;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        input[type="text"], 
-        textarea { 
-            width: 100%; 
-            padding: 10px 14px; 
-            background: rgba(7, 9, 19, 0.9); 
-            border: 1px solid #1f2937; 
-            border-radius: 10px; 
-            color: #fff; 
-            font-size: 13px; 
-            outline: none; 
-            font-family: 'Poppins', sans-serif;
-            transition: all 0.3s ease;
-        }
+        label { display: block; font-size: 11px; color: #9ca3af; margin-bottom: 5px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }
+        input[type="text"], textarea { width: 100%; padding: 10px 14px; background: rgba(7, 9, 19, 0.9); border: 1px solid #1f2937; border-radius: 10px; color: #fff; font-size: 13px; outline: none; font-family: 'Poppins', sans-serif; transition: all 0.3s ease; }
         input:focus, textarea:focus { border-color: #00ffc8; box-shadow: 0 0 15px rgba(0,255,200,0.03); }
         textarea { resize: vertical; height: 80px; }
         
-        .toggle-group {
-            display: flex;
-            align-items: center;
-            gap: 14px;
-            padding: 6px 0;
-        }
-        .toggle-switch {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            cursor: pointer;
-        }
+        .toggle-group { display: flex; align-items: center; gap: 14px; padding: 6px 0; flex-wrap: wrap; }
+        .toggle-switch { display: flex; align-items: center; gap: 10px; cursor: pointer; }
         .toggle-switch input { display: none; }
-        .slider { 
-            width: 44px; 
-            height: 24px; 
-            background: #1f2937; 
-            border-radius: 12px; 
-            position: relative; 
-            transition: all 0.3s ease; 
-            flex-shrink: 0;
-        }
-        .slider::before { 
-            content: ''; 
-            position: absolute; 
-            width: 18px; 
-            height: 18px; 
-            background: #6b7280; 
-            border-radius: 50%; 
-            top: 3px; 
-            left: 3px; 
-            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); 
-        }
+        .slider { width: 44px; height: 24px; background: #1f2937; border-radius: 12px; position: relative; transition: all 0.3s ease; flex-shrink: 0; }
+        .slider::before { content: ''; position: absolute; width: 18px; height: 18px; background: #6b7280; border-radius: 50%; top: 3px; left: 3px; transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
         input:checked + .slider { background: #00ffc8; }
-        input:checked + .slider::before { 
-            transform: translateX(20px); 
-            background: #070913;
-        }
-        .toggle-label {
-            font-size: 12px;
-            color: #9ca3af;
-            font-weight: 500;
-        }
-        .toggle-status {
-            font-size: 10px;
-            color: #6b7280;
-            margin-left: auto;
-        }
+        input:checked + .slider::before { transform: translateX(20px); background: #070913; }
+        .toggle-label { font-size: 12px; color: #9ca3af; font-weight: 500; }
+        .toggle-status { font-size: 10px; color: #6b7280; margin-left: auto; }
         input:checked ~ .toggle-status .off { display: none; }
         input:not(:checked) ~ .toggle-status .on { display: none; }
         
-        .btn-save { 
-            padding: 13px 32px; 
-            background: linear-gradient(135deg, #00ffc8, #00b894); 
-            color: #070913; 
-            border: none; 
-            border-radius: 12px; 
-            font-weight: 700; 
-            cursor: pointer; 
-            transition: all 0.3s ease; 
-            font-size: 13px; 
-            text-transform: uppercase;
-            letter-spacing: 0.8px;
-            box-shadow: 0 4px 20px rgba(0,255,200,0.15);
-            display: inline-flex;
-            align-items: center;
-            gap: 10px;
-        }
-        .btn-save:hover { 
-            transform: translateY(-2px); 
-            box-shadow: 0 8px 30px rgba(0,255,200,0.25);
-        }
+        .btn-save { padding: 13px 32px; background: linear-gradient(135deg, #00ffc8, #00b894); color: #070913; border: none; border-radius: 12px; font-weight: 700; cursor: pointer; transition: all 0.3s ease; font-size: 13px; text-transform: uppercase; letter-spacing: 0.8px; box-shadow: 0 4px 20px rgba(0,255,200,0.15); display: inline-flex; align-items: center; gap: 10px; }
+        .btn-save:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(0,255,200,0.25); }
         
-        .alert-success { 
-            background: rgba(0,255,200,0.06); 
-            border: 1px solid rgba(0,255,200,0.15); 
-            color: #00ffc8; 
-            padding: 12px 18px; 
-            border-radius: 12px; 
-            margin-bottom: 18px; 
-            font-size: 13px; 
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            animation: slideDown 0.4s ease forwards;
-        }
-        @keyframes slideDown {
-            from { opacity: 0; transform: translateY(-10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
+        .alert-success { background: rgba(0,255,200,0.06); border: 1px solid rgba(0,255,200,0.15); color: #00ffc8; padding: 12px 18px; border-radius: 12px; margin-bottom: 18px; font-size: 13px; display: flex; align-items: center; gap: 10px; animation: slideDown 0.4s ease forwards; }
+        @keyframes slideDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
         .alert-success i { font-size: 16px; }
 
-        .status-badge {
-            display: inline-block;
-            padding: 3px 12px;
-            border-radius: 20px;
-            font-size: 10px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
+        .status-badge { display: inline-block; padding: 3px 12px; border-radius: 20px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
         .status-badge.on { background: rgba(0,255,200,0.1); color: #00ffc8; }
         .status-badge.off { background: rgba(239,68,68,0.1); color: #ef4444; }
 
@@ -1669,6 +1194,30 @@ ADMIN_DASHBOARD_TEMPLATE = """
                 </div>
             </div>
 
+            <div class="card">
+                <h3><i class="fa-solid fa-sliders"></i> Advanced Settings</h3>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label>Auto Download Mode</label>
+                        <div class="toggle-group" style="flex-wrap: wrap;">
+                            <label class="toggle-switch">
+                                <input type="checkbox" name="auto_download" {% if config.auto_download %}checked{% endif %}>
+                                <div class="slider"></div>
+                            </label>
+                            <span class="toggle-label">Enable</span>
+                            <span class="toggle-status">
+                                <span class="on status-badge on">● ON</span>
+                                <span class="off status-badge off">● OFF</span>
+                            </span>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Max File Size (MB)</label>
+                        <input type="text" name="max_file_size" value="{{ config.max_file_size }}">
+                    </div>
+                </div>
+            </div>
+
             <button type="submit" class="btn-save"><i class="fa-solid fa-floppy-disk"></i> Save All Changes</button>
         </form>
     </div>
@@ -1711,6 +1260,11 @@ def admin_dashboard():
         app_config['popup_content'] = request.form.get('popup_content', app_config['popup_content'])
         app_config['popup_btn_text'] = request.form.get('popup_btn_text', app_config['popup_btn_text'])
         app_config['popup_btn_url'] = request.form.get('popup_btn_url', app_config['popup_btn_url'])
+        app_config['auto_download'] = True if request.form.get('auto_download') == 'on' else False
+        try:
+            app_config['max_file_size'] = int(request.form.get('max_file_size', 500))
+        except:
+            app_config['max_file_size'] = 500
         saved = True
 
     return render_template_string(ADMIN_DASHBOARD_TEMPLATE, config=app_config, saved=saved)
@@ -1729,7 +1283,15 @@ def api_process():
     if not url:
         return jsonify({'success': False, 'message': 'Please provide a valid URL.'})
 
+    # Clean up old files before processing
+    cleanup_old_files()
+
     platform = detect_platform(url)
+    
+    # Check if platform is allowed
+    if platform not in app_config.get('allowed_platforms', ['tiktok', 'facebook', 'instagram', 'youtube']):
+        return jsonify({'success': False, 'message': f'Platform "{platform}" is not supported or disabled.'})
+    
     success, file_path, unique_id, filesize = download_media(url, platform, format_type)
     
     if success and unique_id:
@@ -1760,6 +1322,17 @@ def download_file_route(file_id):
     if path and os.path.exists(path):
         return send_file(path, as_attachment=True)
     return "File expired or not found!", 404
+
+@app.route('/api/history')
+def get_history():
+    return jsonify({'history': download_history})
+
+@app.route('/api/cleanup')
+def cleanup_route():
+    if not session.get('admin_logged'):
+        return jsonify({'success': False, 'message': 'Unauthorized'})
+    count = cleanup_old_files()
+    return jsonify({'success': True, 'message': f'Cleaned up {count} old files.'})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
